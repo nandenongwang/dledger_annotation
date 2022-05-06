@@ -40,13 +40,22 @@ public class DLedgerRpcNettyService extends DLedgerRpcService {
 
     private static final Logger logger = LoggerFactory.getLogger(DLedgerRpcNettyService.class);
 
+    /**
+     * netty通信client&server
+     */
     private final NettyRemotingServer remotingServer;
     private final NettyRemotingClient remotingClient;
 
+    /**
+     * 节点状态
+     */
     private MemberState memberState;
 
     private DLedgerServer dLedgerServer;
 
+    /**
+     * 通用接受请求处理线程池
+     */
     private final ExecutorService futureExecutor = Executors.newFixedThreadPool(4, new ThreadFactory() {
         private final AtomicInteger threadIndex = new AtomicInteger(0);
 
@@ -56,6 +65,9 @@ public class DLedgerRpcNettyService extends DLedgerRpcService {
         }
     });
 
+    /**
+     * 发送投票请求线程池
+     */
     private final ExecutorService voteInvokeExecutor = Executors.newCachedThreadPool(new ThreadFactory() {
         private final AtomicInteger threadIndex = new AtomicInteger(0);
 
@@ -65,6 +77,9 @@ public class DLedgerRpcNettyService extends DLedgerRpcService {
         }
     });
 
+    /**
+     * 发送心跳请求线程池
+     */
     private final ExecutorService heartBeatInvokeExecutor = Executors.newCachedThreadPool(new ThreadFactory() {
         private final AtomicInteger threadIndex = new AtomicInteger(0);
 
@@ -143,7 +158,7 @@ public class DLedgerRpcNettyService extends DLedgerRpcService {
     }
 
     /**
-     *
+     * 向指定节点异步发送投票请求
      */
     @Override
     public CompletableFuture<VoteResponse> vote(VoteRequest request) throws Exception {

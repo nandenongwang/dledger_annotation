@@ -1,19 +1,3 @@
-/*
- * Copyright 2017-2022 The DLedger Authors.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      https://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package io.openmessaging.storage.dledger.cmdline;
 
 import com.alibaba.fastjson.JSON;
@@ -24,33 +8,55 @@ import io.openmessaging.storage.dledger.store.file.DLedgerMmapFileStore;
 import io.openmessaging.storage.dledger.store.file.MmapFile;
 import io.openmessaging.storage.dledger.store.file.MmapFileList;
 import io.openmessaging.storage.dledger.store.file.SelectMmapBufferResult;
-import java.nio.ByteBuffer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.ByteBuffer;
+
+/**
+ * 读取提案命令 【直接读取mappedFile文件】
+ * 1、指定index、索引目录读取索引文件
+ * 2、指定开始读取pos、读取size、数据目录读取数据文件
+ */
 public class ReadFileCommand extends BaseCommand {
 
-    private static Logger logger = LoggerFactory.getLogger(ReadFileCommand.class);
+    private static final Logger logger = LoggerFactory.getLogger(ReadFileCommand.class);
 
+    /**
+     * 索引文件或数据文件所在目录
+     */
     @Parameter(names = {"--dir", "-d"}, description = "the data dir")
     private String dataDir = null;
 
+    /**
+     * 起始查询位置、索引查询时默认从index计算得、数据查询时需指定
+     */
     @Parameter(names = {"--pos", "-p"}, description = "the start pos")
     private long pos = 0;
 
+    /**
+     * 文件大小、默认数据文件1G、索引文件32M
+     */
     @Parameter(names = {"--size", "-s"}, description = "the file size")
     private int size = -1;
 
+    /**
+     * 查询索引序号
+     */
     @Parameter(names = {"--index", "-i"}, description = "the index")
     private long index = -1L;
 
+    /**
+     * 读取数据时是否读取提案内容
+     */
     @Parameter(names = {"--body", "-b"}, description = "if read the body")
     private boolean readBody = false;
 
     @Override
     public void doCommand() {
         if (index != -1) {
-            pos = index * DLedgerMmapFileStore.INDEX_UNIT_SIZE;
+            //索引序号 * 索引单元大小 = 总逻辑位置
+            pos = index * DLedgerMmapFileStore.INDEX_UNIT_SIZE/* 32 */;
             if (size == -1) {
                 size = DLedgerMmapFileStore.INDEX_UNIT_SIZE * 1024 * 1024;
             }
@@ -61,11 +67,14 @@ public class ReadFileCommand extends BaseCommand {
         }
         MmapFileList mmapFileList = new MmapFileList(dataDir, size);
         mmapFileList.load();
+
+        //计算查询位置在哪个mappedFile中
         MmapFile mmapFile = mmapFileList.findMappedFileByOffset(pos);
         if (mmapFile == null) {
             logger.info("Cannot find the file");
             return;
         }
+        //pos % size获取在文件中的位置、从该位置读取数据
         SelectMmapBufferResult result = mmapFile.selectMappedBuffer((int) (pos % size));
         ByteBuffer buffer = result.getByteBuffer();
         if (index != -1) {

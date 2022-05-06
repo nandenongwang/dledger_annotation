@@ -1,28 +1,23 @@
-/*
- * Copyright 2017-2022 The DLedger Authors.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      https://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package io.openmessaging.storage.dledger.client;
 
 import io.openmessaging.storage.dledger.protocol.DLedgerClientProtocol;
+
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * 客户端接口实现
+ */
 public abstract class DLedgerClientRpcService implements DLedgerClientProtocol {
-    private Map<String, String> peerMap = new ConcurrentHashMap<>();
 
+    /**
+     * 通信dledger server节点
+     */
+    private final Map<String, String> peerMap = new ConcurrentHashMap<>();
+
+    /**
+     * 更新dledger server地址
+     */
     public void updatePeers(String peers) {
         for (String peerInfo : peers.split(";")) {
             String nodeId = peerInfo.split("-")[0];

@@ -1,19 +1,3 @@
-/*
- * Copyright 2017-2022 The DLedger Authors.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      https://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package io.openmessaging.storage.dledger.cmdline;
 
 import com.alibaba.fastjson.JSON;
@@ -24,9 +8,12 @@ import io.openmessaging.storage.dledger.protocol.GetEntriesResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * 查询提案命令
+ */
 public class GetCommand extends BaseCommand {
 
-    private static Logger logger = LoggerFactory.getLogger(GetCommand.class);
+    private static final Logger logger = LoggerFactory.getLogger(GetCommand.class);
 
     @Parameter(names = {"--group", "-g"}, description = "Group of this server")
     private String group = "default";
@@ -34,6 +21,9 @@ public class GetCommand extends BaseCommand {
     @Parameter(names = {"--peers", "-p"}, description = "Peer info of this server")
     private String peers = "n0-localhost:20911";
 
+    /**
+     * 提案序号
+     */
     @Parameter(names = {"--index", "-i"}, description = "get entry from index")
     private long index = 0;
 

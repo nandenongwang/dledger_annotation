@@ -1,30 +1,18 @@
-/*
- * Copyright 2017-2022 The DLedger Authors.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      https://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package io.openmessaging.storage.dledger.cmdline;
 
 import com.beust.jcommander.JCommander;
 import io.openmessaging.storage.dledger.DLedger;
 import io.openmessaging.storage.dledger.DLedgerConfig;
+
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * 命令行入口命令
+ */
 public class BossCommand {
 
-    public static void main(String args[]) {
+    public static void main(String[] args) {
         Map<String, BaseCommand> commands = new HashMap<>();
         commands.put("append", new AppendCommand());
         commands.put("get", new GetCommand());
@@ -39,13 +27,18 @@ public class BossCommand {
         JCommander jc = builder.build();
         jc.parse(args);
 
+        //未解析到子命令、打印用法帮助
         if (jc.getParsedCommand() == null) {
             jc.usage();
-        } else if (jc.getParsedCommand().equals("server")) {
+        }
+        //启动server、解析参数启动dledger server
+        else if ("server".equals(jc.getParsedCommand())) {
             String[] subArgs = new String[args.length - 1];
             System.arraycopy(args, 1, subArgs, 0, subArgs.length);
             DLedger.main(subArgs);
-        } else {
+        }
+        //执行指定的子命令
+        else {
             BaseCommand command = commands.get(jc.getParsedCommand());
             if (command != null) {
                 command.doCommand();

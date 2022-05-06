@@ -1,19 +1,3 @@
-/*
- * Copyright 2017-2022 The DLedger Authors.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      https://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package io.openmessaging.storage.dledger.cmdline;
 
 import com.alibaba.fastjson.JSON;
@@ -24,6 +8,9 @@ import io.openmessaging.storage.dledger.protocol.LeadershipTransferResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * leader手动变更命令
+ */
 public class LeadershipTransferCommand extends BaseCommand {
 
     private static Logger logger = LoggerFactory.getLogger(LeadershipTransferCommand.class);
@@ -34,12 +21,21 @@ public class LeadershipTransferCommand extends BaseCommand {
     @Parameter(names = {"--peers", "-p"}, description = "Peer info of this server")
     private String peers = "n0-localhost:20911";
 
+    /**
+     * 当前leader节点ID
+     */
     @Parameter(names = {"--leader", "-l"}, description = "set the current leader manually")
     private String leaderId;
 
+    /**
+     * 新leader节点ID
+     */
     @Parameter(names = {"--transfereeId", "-t"}, description = "Node try to be the new leader")
     private String transfereeId = "n0";
 
+    /**
+     * 当前leader任期
+     */
     @Parameter(names = {"--term"}, description = "current term")
     private long term;
 
@@ -48,8 +44,7 @@ public class LeadershipTransferCommand extends BaseCommand {
         DLedgerClient dLedgerClient = new DLedgerClient(group, peers);
         dLedgerClient.startup();
         LeadershipTransferResponse response = dLedgerClient.leadershipTransfer(leaderId, transfereeId, term);
-        logger.info("LeadershipTransfer code={}, Result:{}", DLedgerResponseCode.valueOf(response.getCode()),
-            JSON.toJSONString(response));
+        logger.info("LeadershipTransfer code={}, Result:{}", DLedgerResponseCode.valueOf(response.getCode()), JSON.toJSONString(response));
         dLedgerClient.shutdown();
     }
 }

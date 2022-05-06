@@ -19,18 +19,17 @@ package io.openmessaging.storage.dledger;
 import io.openmessaging.storage.dledger.protocol.DLedgerResponseCode;
 import io.openmessaging.storage.dledger.utils.IOUtils;
 import io.openmessaging.storage.dledger.utils.PreConditions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.File;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-import static io.openmessaging.storage.dledger.MemberState.Role.CANDIDATE;
-import static io.openmessaging.storage.dledger.MemberState.Role.FOLLOWER;
-import static io.openmessaging.storage.dledger.MemberState.Role.LEADER;
+import static io.openmessaging.storage.dledger.MemberState.Role.*;
 
 public class MemberState {
 
@@ -45,9 +44,25 @@ public class MemberState {
     private final String peers;
     private volatile Role role = CANDIDATE;
     private volatile String leaderId;
+
+    /**
+     * 当前节点朝代
+     */
     private volatile long currTerm = 0;
+
+    /**
+     * 当前投票节点
+     */
     private volatile String currVoteFor;
+
+    /**
+     * 最近提议序号
+     */
     private volatile long ledgerEndIndex = -1;
+
+    /**
+     * 最近提议朝代
+     */
     private volatile long ledgerEndTerm = -1;
     private long knownMaxTermInGroup = -1;
     private Map<String, String> peerMap = new HashMap<>();
@@ -69,6 +84,9 @@ public class MemberState {
         loadTerm();
     }
 
+    /**
+     * 从currterm文件中恢复当前朝代及上次投票节点ID 【默认0、null】
+     */
     private void loadTerm() {
         try {
             String data = IOUtils.file2String(dLedgerConfig.getDefaultPath() + File.separator + TERM_PERSIST_FILE);
@@ -90,6 +108,9 @@ public class MemberState {
         }
     }
 
+    /**
+     * 将当前朝代及投票节点ID持久化到currterm文件中
+     */
     private void persistTerm() {
         try {
             Properties properties = new Properties();
@@ -102,20 +123,33 @@ public class MemberState {
         }
     }
 
+    /**
+     * 获取所处朝代
+     */
     public long currTerm() {
         return currTerm;
     }
 
+    /**
+     * 获取投票节点ID
+     */
     public String currVoteFor() {
         return currVoteFor;
     }
 
+    /**
+     * 设置投票节点ID并持久化
+     */
     public synchronized void setCurrVoteFor(String currVoteFor) {
         this.currVoteFor = currVoteFor;
         persistTerm();
     }
 
+    /**
+     *
+     */
     public synchronized long nextTerm() {
+        //检查操作节点是否是master
         PreConditions.check(role == CANDIDATE, DLedgerResponseCode.ILLEGAL_MEMBER_STATE, "%s != %s", role, CANDIDATE);
         if (knownMaxTermInGroup > currTerm) {
             currTerm = knownMaxTermInGroup;
@@ -127,6 +161,9 @@ public class MemberState {
         return currTerm;
     }
 
+    /**
+     *
+     */
     public synchronized void changeToLeader(long term) {
         PreConditions.check(currTerm == term, DLedgerResponseCode.ILLEGAL_MEMBER_STATE, "%d != %d", currTerm, term);
         this.role = LEADER;
@@ -134,6 +171,9 @@ public class MemberState {
         peersLiveTable.clear();
     }
 
+    /**
+     *
+     */
     public synchronized void changeToFollower(long term, String leaderId) {
         PreConditions.check(currTerm == term, DLedgerResponseCode.ILLEGAL_MEMBER_STATE, "%d != %d", currTerm, term);
         this.role = FOLLOWER;
@@ -141,6 +181,9 @@ public class MemberState {
         transferee = null;
     }
 
+    /**
+     * 变更节点角色到candidate
+     */
     public synchronized void changeToCandidate(long term) {
         assert term >= currTerm;
         PreConditions.check(term >= currTerm, DLedgerResponseCode.ILLEGAL_MEMBER_STATE, "should %d >= %d", term, currTerm);

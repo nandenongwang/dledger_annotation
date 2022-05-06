@@ -1,50 +1,47 @@
-/*
- * Copyright 2017-2022 The DLedger Authors.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      https://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package io.openmessaging.storage.dledger.client;
 
 import io.openmessaging.storage.dledger.ShutdownAbleThread;
-import io.openmessaging.storage.dledger.protocol.AppendEntryRequest;
-import io.openmessaging.storage.dledger.protocol.AppendEntryResponse;
-import io.openmessaging.storage.dledger.protocol.DLedgerResponseCode;
-import io.openmessaging.storage.dledger.protocol.GetEntriesRequest;
-import io.openmessaging.storage.dledger.protocol.GetEntriesResponse;
-import io.openmessaging.storage.dledger.protocol.MetadataRequest;
-import io.openmessaging.storage.dledger.protocol.MetadataResponse;
-import io.openmessaging.storage.dledger.protocol.LeadershipTransferResponse;
-import io.openmessaging.storage.dledger.protocol.LeadershipTransferRequest;
+import io.openmessaging.storage.dledger.protocol.*;
 import io.openmessaging.storage.dledger.utils.DLedgerUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
+/**
+ * dledger客户端
+ */
 public class DLedgerClient {
 
-    private static Logger logger = LoggerFactory.getLogger(DLedgerClient.class);
-    private final Map<String, String> peerMap = new ConcurrentHashMap<>();
-    private final String group;
-    private String leaderId;
-    private DLedgerClientRpcService dLedgerClientRpcService;
+    private static final Logger logger = LoggerFactory.getLogger(DLedgerClient.class);
 
-    private MetadataUpdater metadataUpdater = new MetadataUpdater("MetadataUpdater", logger);
+    /**
+     * 客户端配置中的dledger server节点
+     */
+    private final Map<String/* id */, String/* addr */> peerMap = new ConcurrentHashMap<>();
+
+    /**
+     * group
+     */
+    private final String group;
+
+    /**
+     * leader节点ID
+     */
+    private String leaderId;
+
+    /**
+     * 客户端功能接口实现
+     */
+    private final DLedgerClientRpcService dLedgerClientRpcService;
+
+    /**
+     * 元数据更新后台线程
+     */
+    private final MetadataUpdater metadataUpdater = new MetadataUpdater("MetadataUpdater", logger);
 
     public DLedgerClient(String group, String peers) {
         this.group = group;
@@ -54,6 +51,9 @@ public class DLedgerClient {
         leaderId = peerMap.keySet().iterator().next();
     }
 
+    /**
+     *
+     */
     public AppendEntryResponse append(byte[] body) {
         try {
             waitOnUpdatingMetadata(1500, false);
@@ -84,6 +84,9 @@ public class DLedgerClient {
         }
     }
 
+    /**
+     *
+     */
     public GetEntriesResponse get(long index) {
         try {
             waitOnUpdatingMetadata(1500, false);
@@ -115,6 +118,9 @@ public class DLedgerClient {
         }
     }
 
+    /**
+     *
+     */
     public LeadershipTransferResponse leadershipTransfer(String curLeaderId, String transfereeId, long term) {
 
         try {
@@ -132,16 +138,25 @@ public class DLedgerClient {
         }
     }
 
+    /**
+     * 启动客户端 【api server & 元数据更新线程】
+     */
     public void startup() {
         this.dLedgerClientRpcService.startup();
         this.metadataUpdater.start();
     }
 
+    /**
+     * 关闭客户端 【api server & 元数据更新线程】
+     */
     public void shutdown() {
         this.dLedgerClientRpcService.shutdown();
         this.metadataUpdater.shutdown();
     }
 
+    /**
+     * 设置client配置的dledger server地址
+     */
     private void updatePeers(String peers) {
         for (String peerInfo : peers.split(";")) {
             String nodeId = peerInfo.split("-")[0];
@@ -149,11 +164,17 @@ public class DLedgerClient {
         }
     }
 
+    /**
+     * 唤醒元数据更新线程拉取dledger server节点
+     */
     private synchronized void needFreshMetadata() {
         leaderId = null;
         metadataUpdater.wakeup();
     }
 
+    /**
+     * 延时更新元数据
+     */
     private synchronized void waitOnUpdatingMetadata(long maxWaitMs, boolean needFresh) {
         if (needFresh) {
             leaderId = null;
@@ -171,6 +192,9 @@ public class DLedgerClient {
         }
     }
 
+    /**
+     * 元数据更新后台线程 【定时拉取、从配置server地址拉取所有dledger server地址和leaderId】
+     */
     private class MetadataUpdater extends ShutdownAbleThread {
 
         public MetadataUpdater(String name, Logger logger) {
