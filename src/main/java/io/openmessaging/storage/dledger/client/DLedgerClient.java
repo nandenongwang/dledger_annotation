@@ -52,16 +52,20 @@ public class DLedgerClient {
     }
 
     /**
-     *
+     * 增加提案
      */
     public AppendEntryResponse append(byte[] body) {
         try {
+            //region 更新server地址
             waitOnUpdatingMetadata(1500, false);
             if (leaderId == null) {
                 AppendEntryResponse appendEntryResponse = new AppendEntryResponse();
                 appendEntryResponse.setCode(DLedgerResponseCode.METADATA_ERROR.getCode());
                 return appendEntryResponse;
             }
+            //endregion
+
+            //region 向leader发送增加提案请求
             AppendEntryRequest appendEntryRequest = new AppendEntryRequest();
             appendEntryRequest.setGroup(group);
             appendEntryRequest.setRemoteId(leaderId);
@@ -74,6 +78,7 @@ public class DLedgerClient {
                     response = dLedgerClientRpcService.append(appendEntryRequest).get();
                 }
             }
+            //endregion
             return response;
         } catch (Exception e) {
             needFreshMetadata();
@@ -85,7 +90,7 @@ public class DLedgerClient {
     }
 
     /**
-     *
+     * 查询提案
      */
     public GetEntriesResponse get(long index) {
         try {
@@ -119,7 +124,7 @@ public class DLedgerClient {
     }
 
     /**
-     *
+     * leader转移
      */
     public LeadershipTransferResponse leadershipTransfer(String curLeaderId, String transfereeId, long term) {
 

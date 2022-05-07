@@ -1,19 +1,3 @@
-/*
- * Copyright 2017-2022 The DLedger Authors.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      https://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package io.openmessaging.storage.dledger.utils;
 
 import java.io.File;
@@ -21,6 +5,10 @@ import java.text.NumberFormat;
 import java.util.Calendar;
 
 public class DLedgerUtils {
+
+    /**
+     * 睡眠指定毫秒数
+     */
     public static void sleep(long sleepMs) {
         try {
             Thread.sleep(sleepMs);
@@ -29,10 +17,16 @@ public class DLedgerUtils {
         }
     }
 
+    /**
+     * 计算当前时间与指定时间差值
+     */
     public static long elapsed(long start) {
         return System.currentTimeMillis() - start;
     }
 
+    /**
+     * offset数字格式化成文件名
+     */
     public static String offset2FileName(final long offset) {
         NumberFormat nf = NumberFormat.getInstance();
         nf.setMinimumIntegerDigits(20);
@@ -41,10 +35,16 @@ public class DLedgerUtils {
         return nf.format(offset);
     }
 
+    /**
+     * 计算当前时间与指定时间差值
+     */
     public static long computeEclipseTimeMilliseconds(final long beginTime) {
         return System.currentTimeMillis() - beginTime;
     }
 
+    /**
+     * 是否到了指定时间 【小时】
+     */
     public static boolean isItTimeToDo(final String when) {
         String[] whiles = when.split(";");
         if (whiles.length > 0) {
@@ -60,6 +60,9 @@ public class DLedgerUtils {
         return false;
     }
 
+    /**
+     * 计算指定路径所在盘空间使用率
+     */
     public static double getDiskPartitionSpaceUsedPercent(final String path) {
         if (null == path || path.isEmpty()) {
             return -1;
@@ -91,6 +94,9 @@ public class DLedgerUtils {
         return -1;
     }
 
+    /**
+     * 判断文件是否存在
+     */
     public static boolean isPathExists(final String path) {
         File file = new File(path);
         return file.exists();

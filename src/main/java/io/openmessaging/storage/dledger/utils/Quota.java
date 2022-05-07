@@ -1,33 +1,34 @@
-/*
- * Copyright 2017-2022 The DLedger Authors.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      https://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package io.openmessaging.storage.dledger.utils;
 
+/**
+ * 统计工具
+ */
 public class Quota {
 
+    /**
+     * 采样指标最大值
+     */
     private final int max;
 
+    /**
+     * 采样值列表
+     */
     private final int[] samples;
+
+    /**
+     * 采样值列表
+     */
     private final long[] timeVec;
 
+    /**
+     * 保留多少个采样值
+     */
     private final int window;
 
     public Quota(int max) {
         this(5, max);
     }
+
     public Quota(int window, int max) {
         if (window < 5) {
             window = 5;
@@ -38,14 +39,23 @@ public class Quota {
         this.timeVec = new long[window];
     }
 
+    /**
+     * 取模计算采样值在哪格中
+     */
     private int index(long currTimeMs) {
-        return  (int) (second(currTimeMs) % window);
+        return (int) (second(currTimeMs) % window);
     }
 
+    /**
+     * 毫秒转换成秒
+     */
     private long second(long currTimeMs) {
         return currTimeMs / 1000;
     }
 
+    /**
+     * 采样 【设置所在格值和时间、相同时间累加采样值】
+     */
     public void sample(int value) {
         long timeMs = System.currentTimeMillis();
         int index = index(timeMs);
@@ -59,6 +69,9 @@ public class Quota {
 
     }
 
+    /**
+     * 本秒内采样值是否超过最大值
+     */
     public boolean validateNow() {
         long timeMs = System.currentTimeMillis();
         int index = index(timeMs);
@@ -69,6 +82,9 @@ public class Quota {
         return false;
     }
 
+    /**
+     * 离下一秒还剩多少毫秒
+     */
     public int leftNow() {
         long timeMs = System.currentTimeMillis();
         return (int) ((second(timeMs) + 1) * 1000 - timeMs);

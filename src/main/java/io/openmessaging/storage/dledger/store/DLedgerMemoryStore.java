@@ -20,25 +20,25 @@ public class DLedgerMemoryStore extends DLedgerStore {
     private static final Logger logger = LoggerFactory.getLogger(DLedgerMemoryStore.class);
 
     /**
-     *
+     * 存储的第一条提案序号
      */
     @Getter
     private long ledgerBeginIndex = -1;
 
     /**
-     *
+     * 存储的最后一条提案序号
      */
     @Getter
     private long ledgerEndIndex = -1;
 
     /**
-     *
+     * 确认的提案序号 【内存存储默认与ledgerEndIndex相同】
      */
     @Getter
     private long committedIndex = -1;
 
     /**
-     *
+     * 最后一条提案任期号
      */
     @Getter
     private long ledgerEndTerm;
@@ -64,7 +64,7 @@ public class DLedgerMemoryStore extends DLedgerStore {
     }
 
     /**
-     *
+     * leader存储提案条目 【存储提案、最后序号&确认序号递增】
      */
     @Override
     public DLedgerEntry appendAsLeader(DLedgerEntry entry) {
@@ -91,7 +91,7 @@ public class DLedgerMemoryStore extends DLedgerStore {
     }
 
     /**
-     *
+     * 丢弃指定提案位置之后的提案 【设置提案指针、之后的会被覆盖】
      */
     @Override
     public long truncate(DLedgerEntry entry, long leaderTerm, String leaderId) {
@@ -99,7 +99,7 @@ public class DLedgerMemoryStore extends DLedgerStore {
     }
 
     /**
-     *
+     * follower存储提案条目
      */
     @Override
     public DLedgerEntry appendAsFollower(DLedgerEntry entry, long leaderTerm, String leaderId) {
