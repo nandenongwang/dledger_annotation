@@ -442,18 +442,50 @@ public class DLedgerEntryPusher {
      */
     private class EntryDispatcher extends ShutdownAbleThread {
 
+        /**
+         * 同步阶段 【COMPARE、TRUNCATE、APPEND】
+         */
         private final AtomicReference<PushEntryRequest.Type> type = new AtomicReference<>(PushEntryRequest.Type.COMPARE);
+
+        /**
+         * 上次推送提交进度时间
+         */
         private long lastPushCommitTimeMs = -1;
+
         /**
          * 节点ID
          */
         private final String peerId;
+
+        /**
+         * 提案比较位置
+         */
         private long compareIndex = -1;
+
+        /**
+         * 同步提案位置
+         */
         private long writeIndex = -1;
-        private final int maxPendingSize = 1000;
+
+        /**
+         * 当前任期
+         */
         private long term = -1;
+
+        /**
+         * 当前leaderId
+         */
         private String leaderId = null;
+
+        /**
+         * 上次检查无效挂起请求时间
+         */
         private long lastCheckLeakTimeMs = System.currentTimeMillis();
+
+        /**
+         * 最大挂起append请求
+         */
+        private final int maxPendingSize = 1000;
 
         /**
          * 挂起中的append请求
@@ -487,6 +519,9 @@ public class DLedgerEntryPusher {
             return true;
         }
 
+        /**
+         * 创建同步日志请求
+         */
         private PushEntryRequest buildPushRequest(DLedgerEntry entry, PushEntryRequest.Type target) {
             PushEntryRequest request = new PushEntryRequest();
             request.setGroup(memberState.getGroup());
@@ -593,15 +628,21 @@ public class DLedgerEntryPusher {
             }
         }
 
+        /**
+         * 检测最早待确认提案复制是否响应超时、是则重新发送
+         */
         private void doCheckAppendResponse() throws Exception {
             long peerWaterMark = getPeerWaterMark(term, peerId);
             Long sendTimeMs = pendingMap.get(peerWaterMark + 1);
-            if (sendTimeMs != null && System.currentTimeMillis() - sendTimeMs > dLedgerConfig.getMaxPushTimeOutMs()) {
+            if (sendTimeMs != null && System.currentTimeMillis() - sendTimeMs > dLedgerConfig.getMaxPushTimeOutMs()/* 1000 */) {
                 logger.warn("[Push-{}]Retry to push entry at {}", peerId, peerWaterMark + 1);
                 doAppendInner(peerWaterMark + 1);
             }
         }
 
+        /**
+         * 从同步位置开始向follower同步提案
+         */
         private void doAppend() throws Exception {
             while (true) {
                 if (!checkAndFreshState()) {
@@ -610,11 +651,15 @@ public class DLedgerEntryPusher {
                 if (type.get() != PushEntryRequest.Type.APPEND) {
                     break;
                 }
+                //region 同步位置到达最后、同步提交位置
                 if (writeIndex > dLedgerStore.getLedgerEndIndex()) {
                     doCommit();
                     doCheckAppendResponse();
                     break;
                 }
+                //endregion
+
+                //region 摘除无效挂起请求 【已确认进度前的请求均已确认同步成功】
                 if (pendingMap.size() >= maxPendingSize || (DLedgerUtils.elapsed(lastCheckLeakTimeMs) > 1000)) {
                     long peerWaterMark = getPeerWaterMark(term, peerId);
                     for (Long index : pendingMap.keySet()) {
@@ -624,12 +669,19 @@ public class DLedgerEntryPusher {
                     }
                     lastCheckLeakTimeMs = System.currentTimeMillis();
                 }
+                //endregion
+
+                //region 挂起请求过多响应超时检测 【挂起请求数过多(未收到响应)、可能网络异常、从确认同步进度下一条重新发送】
                 if (pendingMap.size() >= maxPendingSize) {
                     doCheckAppendResponse();
                     break;
                 }
+                //endregion
+
+                //region 向follower同步该位置提案并递增同步位置
                 doAppendInner(writeIndex);
                 writeIndex++;
+                //endregion
             }
         }
 
