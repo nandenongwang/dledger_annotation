@@ -10,6 +10,7 @@ import io.openmessaging.storage.dledger.store.DLedgerStore;
 import io.openmessaging.storage.dledger.store.file.DLedgerMmapFileStore;
 import io.openmessaging.storage.dledger.utils.DLedgerUtils;
 import io.openmessaging.storage.dledger.utils.PreConditions;
+import lombok.Getter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,16 +23,43 @@ import java.util.concurrent.TimeUnit;
 
 public class DLedgerServer implements DLedgerProtocolHandler {
 
-    private static Logger logger = LoggerFactory.getLogger(DLedgerServer.class);
+    private static final Logger logger = LoggerFactory.getLogger(DLedgerServer.class);
 
-    private MemberState memberState;
-    private DLedgerConfig dLedgerConfig;
-    private DLedgerStore dLedgerStore;
-    private DLedgerRpcService dLedgerRpcService;
-    private DLedgerEntryPusher dLedgerEntryPusher;
-    private DLedgerLeaderElector dLedgerLeaderElector;
+    /**
+     * 节点状态
+     */
+    @Getter
+    private final MemberState memberState;
 
-    private ScheduledExecutorService executorService;
+    /**
+     * dledger server配置
+     */
+    private final DLedgerConfig dLedgerConfig;
+
+    /**
+     * 提案存储服务
+     */
+    private final DLedgerStore dLedgerStore;
+
+    /**
+     * 远程RPC服务
+     */
+    private final DLedgerRpcService dLedgerRpcService;
+
+    /**
+     * 提案推送服务
+     */
+    private final DLedgerEntryPusher dLedgerEntryPusher;
+
+    /**
+     * leader选举服务
+     */
+    private final DLedgerLeaderElector dLedgerLeaderElector;
+
+    /**
+     * 调度线程池 【检查并转移leader到优先leader节点】
+     */
+    private final ScheduledExecutorService executorService;
     private Optional<StateMachineCaller> fsmCaller;
 
     public DLedgerServer(DLedgerConfig dLedgerConfig) {
@@ -50,6 +78,7 @@ public class DLedgerServer implements DLedgerProtocolHandler {
         this.fsmCaller = Optional.empty();
     }
 
+    //region 启动 &关闭 【启动、关闭各服务&调度任务】
     public void startup() {
         this.dLedgerStore.startup();
         this.dLedgerRpcService.startup();
@@ -66,7 +95,11 @@ public class DLedgerServer implements DLedgerProtocolHandler {
         executorService.shutdown();
         this.fsmCaller.ifPresent(StateMachineCaller::shutdown);
     }
+    //endregion
 
+    /**
+     * 创建提案存储服务 【默认文件实现】
+     */
     private DLedgerStore createDLedgerStore(String storeType, DLedgerConfig config, MemberState memberState) {
         if (storeType.equals(DLedgerConfig.MEMORY)) {
             return new DLedgerMemoryStore(config, memberState);
@@ -75,10 +108,9 @@ public class DLedgerServer implements DLedgerProtocolHandler {
         }
     }
 
-    public MemberState getMemberState() {
-        return memberState;
-    }
-
+    /**
+     * 注册提案推送状态机
+     */
     public void registerStateMachine(final StateMachine fsm) {
         final StateMachineCaller fsmCaller = new StateMachineCaller(this.dLedgerStore, fsm, this.dLedgerEntryPusher);
         fsmCaller.start();
@@ -87,14 +119,19 @@ public class DLedgerServer implements DLedgerProtocolHandler {
         this.dLedgerEntryPusher.registerStateMachine(this.fsmCaller);
     }
 
+    /**
+     * 获取提案推送状态机
+     */
     public StateMachine getStateMachine() {
         return this.fsmCaller.map(StateMachineCaller::getStateMachine).orElse(null);
     }
 
+    /**
+     * 接收心跳请求转发选举服务处理 【leader -> follower&candidate】
+     */
     @Override
     public CompletableFuture<HeartBeatResponse> handleHeartBeat(HeartBeatRequest request) throws Exception {
         try {
-
             PreConditions.check(memberState.getSelfId().equals(request.getRemoteId()), DLedgerResponseCode.UNKNOWN_MEMBER, "%s != %s", request.getRemoteId(), memberState.getSelfId());
             PreConditions.check(memberState.getGroup().equals(request.getGroup()), DLedgerResponseCode.UNKNOWN_GROUP, "%s != %s", request.getGroup(), memberState.getGroup());
             return dLedgerLeaderElector.handleHeartBeat(request);
@@ -108,6 +145,9 @@ public class DLedgerServer implements DLedgerProtocolHandler {
         }
     }
 
+    /**
+     * 接收投票请求转发选举服务处理 【candidate -> all】
+     */
     @Override
     public CompletableFuture<VoteResponse> handleVote(VoteRequest request) throws Exception {
         try {
@@ -125,6 +165,7 @@ public class DLedgerServer implements DLedgerProtocolHandler {
     }
 
     /**
+     * 接收新增提案 【本地存储后挂起请求、等待提案达成一致 client -> leader】
      * Handle the append requests:
      * 1.append the entry to local store
      * 2.submit the future to entry pusher and wait the quorum ack
@@ -142,6 +183,7 @@ public class DLedgerServer implements DLedgerProtocolHandler {
             PreConditions.check(memberState.isLeader(), DLedgerResponseCode.NOT_LEADER);
             PreConditions.check(memberState.getTransferee() == null, DLedgerResponseCode.LEADER_TRANSFERRING);
             long currTerm = memberState.currTerm();
+            //region 限流 【挂起请求数过多】
             if (dLedgerEntryPusher.isPendingFull(currTerm)) {
                 AppendEntryResponse appendEntryResponse = new AppendEntryResponse();
                 appendEntryResponse.setGroup(memberState.getGroup());
@@ -149,7 +191,11 @@ public class DLedgerServer implements DLedgerProtocolHandler {
                 appendEntryResponse.setTerm(currTerm);
                 appendEntryResponse.setLeaderId(memberState.getSelfId());
                 return AppendFuture.newCompletedFuture(-1, appendEntryResponse);
-            } else {
+            }
+            //endregion
+
+            //region 存储提案并等待提案提交
+            else {
                 if (request instanceof BatchAppendEntryRequest) {
                     BatchAppendEntryRequest batchRequest = (BatchAppendEntryRequest) request;
                     if (batchRequest.getBatchMsgs() != null && batchRequest.getBatchMsgs().size() != 0) {
@@ -165,8 +211,7 @@ public class DLedgerServer implements DLedgerProtocolHandler {
                             positions[index++] = resEntry.getPos();
                         }
                         // only wait last entry ack is ok
-                        BatchAppendFuture<AppendEntryResponse> batchAppendFuture =
-                                (BatchAppendFuture<AppendEntryResponse>) dLedgerEntryPusher.waitAck(resEntry, true);
+                        BatchAppendFuture<AppendEntryResponse> batchAppendFuture = (BatchAppendFuture<AppendEntryResponse>) dLedgerEntryPusher.waitAck(resEntry, true);
                         batchAppendFuture.setPositions(positions);
                         return batchAppendFuture;
                     }
@@ -179,6 +224,7 @@ public class DLedgerServer implements DLedgerProtocolHandler {
                     return dLedgerEntryPusher.waitAck(resEntry, false);
                 }
             }
+            //endregion
         } catch (DLedgerException e) {
             logger.error("[{}][HandleAppend] failed", memberState.getSelfId(), e);
             AppendEntryResponse response = new AppendEntryResponse();
@@ -189,6 +235,9 @@ public class DLedgerServer implements DLedgerProtocolHandler {
         }
     }
 
+    /**
+     * 接收查询提案请求转发提案存储服务处理 【client -> leader】
+     */
     @Override
     public CompletableFuture<GetEntriesResponse> handleGet(GetEntriesRequest request) throws IOException {
         try {
@@ -236,11 +285,17 @@ public class DLedgerServer implements DLedgerProtocolHandler {
 
     }
 
+    /**
+     * follower向leader拉取提案 【采用leader推送方式、不存在pull】
+     */
     @Override
     public CompletableFuture<PullEntriesResponse> handlePull(PullEntriesRequest request) {
         return null;
     }
 
+    /**
+     * 接收提案复制请求转发推送服务处理 【leader -> follower】
+     */
     @Override
     public CompletableFuture<PushEntryResponse> handlePush(PushEntryRequest request) throws Exception {
         try {
@@ -258,11 +313,16 @@ public class DLedgerServer implements DLedgerProtocolHandler {
 
     }
 
+    /**
+     * 接收手动leader转移请求转发选举服务处理 【client -> old leader -> new leader】
+     */
     @Override
     public CompletableFuture<LeadershipTransferResponse> handleLeadershipTransfer(LeadershipTransferRequest request) throws Exception {
         try {
             PreConditions.check(memberState.getSelfId().equals(request.getRemoteId()), DLedgerResponseCode.UNKNOWN_MEMBER, "%s != %s", request.getRemoteId(), memberState.getSelfId());
             PreConditions.check(memberState.getGroup().equals(request.getGroup()), DLedgerResponseCode.UNKNOWN_GROUP, "%s != %s", request.getGroup(), memberState.getGroup());
+
+            //region 当前旧leader处理
             if (memberState.getSelfId().equals(request.getTransferId())) {
                 //It's the leader received the transfer command.
                 PreConditions.check(memberState.isPeerMember(request.getTransfereeId()), DLedgerResponseCode.UNKNOWN_MEMBER, "transferee=%s is not a peer member", request.getTransfereeId());
@@ -274,10 +334,15 @@ public class DLedgerServer implements DLedgerProtocolHandler {
                 PreConditions.check(transfereeFallBehind < dLedgerConfig.getMaxLeadershipTransferWaitIndex(),
                         DLedgerResponseCode.FALL_BEHIND_TOO_MUCH, "transferee fall behind too much, diff=%s", transfereeFallBehind);
                 return dLedgerLeaderElector.handleLeadershipTransfer(request);
-            } else if (memberState.getSelfId().equals(request.getTransfereeId())) {
+            }
+            //endregion
+
+            //region 新leader处理
+            else if (memberState.getSelfId().equals(request.getTransfereeId())) {
                 // It's the transferee received the take leadership command.
                 PreConditions.check(request.getTransferId().equals(memberState.getLeaderId()), DLedgerResponseCode.INCONSISTENT_LEADER, "transfer=%s is not leader", request.getTransferId());
 
+                //region 等待进度追平直到超时
                 long costTime = 0L;
                 long startTime = System.currentTimeMillis();
                 long fallBehind = request.getTakeLeadershipLedgerIndex() - memberState.getLedgerEndIndex();
@@ -297,8 +362,12 @@ public class DLedgerServer implements DLedgerProtocolHandler {
                     costTime = System.currentTimeMillis() - startTime;
                 }
 
+                //endregion
+
                 return dLedgerLeaderElector.handleTakeLeadership(request);
-            } else {
+            }
+            //endregion
+            else {
                 return CompletableFuture.completedFuture(new LeadershipTransferResponse().term(memberState.currTerm()).code(DLedgerResponseCode.UNEXPECTED_ARGUMENT.getCode()));
             }
         } catch (DLedgerException e) {
@@ -312,6 +381,9 @@ public class DLedgerServer implements DLedgerProtocolHandler {
 
     }
 
+    /**
+     * 检查优先leader配置并转移leader 【常规检查&落后进度检查】
+     */
     private void checkPreferredLeader() {
         if (!memberState.isLeader()) {
             return;

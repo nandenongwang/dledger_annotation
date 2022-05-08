@@ -124,7 +124,7 @@ public class DLedgerClient {
     }
 
     /**
-     * leader转移
+     * 将指定任期leader转移到transfereeId
      */
     public LeadershipTransferResponse leadershipTransfer(String curLeaderId, String transfereeId, long term) {
 

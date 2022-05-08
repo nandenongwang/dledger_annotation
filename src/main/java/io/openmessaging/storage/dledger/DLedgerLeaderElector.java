@@ -722,7 +722,7 @@ public class DLedgerLeaderElector {
     }
 
     /**
-     * 处理leader变更
+     * 当前leader处理leader变更
      */
     public CompletableFuture<LeadershipTransferResponse> handleLeadershipTransfer(LeadershipTransferRequest request) throws Exception {
         logger.info("handleLeadershipTransfer: {}", request);
@@ -770,6 +770,9 @@ public class DLedgerLeaderElector {
         });
     }
 
+    /**
+     * 新leader接收leader变更
+     */
     public CompletableFuture<LeadershipTransferResponse> handleTakeLeadership(LeadershipTransferRequest request) throws Exception {
         logger.debug("handleTakeLeadership.request={}", request);
         synchronized (memberState) {

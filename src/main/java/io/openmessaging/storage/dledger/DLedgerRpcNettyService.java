@@ -1,19 +1,3 @@
-/*
- * Copyright 2017-2022 The DLedger Authors.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      https://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package io.openmessaging.storage.dledger;
 
 import com.alibaba.fastjson.JSON;
@@ -41,9 +25,13 @@ public class DLedgerRpcNettyService extends DLedgerRpcService {
     private static final Logger logger = LoggerFactory.getLogger(DLedgerRpcNettyService.class);
 
     /**
-     * netty通信client&server
+     * RPC client
      */
     private final NettyRemotingServer remotingServer;
+
+    /**
+     * RPC server
+     */
     private final NettyRemotingClient remotingClient;
 
     /**
@@ -51,6 +39,9 @@ public class DLedgerRpcNettyService extends DLedgerRpcService {
      */
     private MemberState memberState;
 
+    /**
+     * dledger服务
+     */
     private DLedgerServer dLedgerServer;
 
     /**
@@ -89,6 +80,9 @@ public class DLedgerRpcNettyService extends DLedgerRpcService {
         }
     });
 
+    /**
+     * 初始化rpc client&server、注册命令处理器
+     */
     public DLedgerRpcNettyService(DLedgerServer dLedgerServer) {
         this.dLedgerServer = dLedgerServer;
         this.memberState = dLedgerServer.getMemberState();
@@ -185,6 +179,9 @@ public class DLedgerRpcNettyService extends DLedgerRpcService {
         return future;
     }
 
+    /**
+     * 【服务端无】
+     */
     @Override
     public CompletableFuture<GetEntriesResponse> get(GetEntriesRequest request) throws Exception {
         GetEntriesResponse entriesResponse = new GetEntriesResponse();
@@ -192,6 +189,9 @@ public class DLedgerRpcNettyService extends DLedgerRpcService {
         return CompletableFuture.completedFuture(entriesResponse);
     }
 
+    /**
+     * 新增提案 【未使用、client使用客户端clientRpcServer新增、服务端只push提案】
+     */
     @Override
     public CompletableFuture<AppendEntryResponse> append(AppendEntryRequest request) throws Exception {
         CompletableFuture<AppendEntryResponse> future = new CompletableFuture<>();
@@ -220,6 +220,9 @@ public class DLedgerRpcNettyService extends DLedgerRpcService {
         return future;
     }
 
+    /**
+     * 【服务端无】
+     */
     @Override
     public CompletableFuture<MetadataResponse> metadata(MetadataRequest request) throws Exception {
         MetadataResponse metadataResponse = new MetadataResponse();
@@ -227,6 +230,9 @@ public class DLedgerRpcNettyService extends DLedgerRpcService {
         return CompletableFuture.completedFuture(metadataResponse);
     }
 
+    /**
+     * 主动拉取提案 【不支持】
+     */
     @Override
     public CompletableFuture<PullEntriesResponse> pull(PullEntriesRequest request) throws Exception {
         RemotingCommand wrapperRequest = RemotingCommand.createRequestCommand(DLedgerRequestCode.PULL.getCode(), null);
@@ -236,6 +242,9 @@ public class DLedgerRpcNettyService extends DLedgerRpcService {
         return CompletableFuture.completedFuture(response);
     }
 
+    /**
+     * leader向follower推送提案
+     */
     @Override
     public CompletableFuture<PushEntryResponse> push(PushEntryRequest request) throws Exception {
         CompletableFuture<PushEntryResponse> future = new CompletableFuture<>();
@@ -265,9 +274,11 @@ public class DLedgerRpcNettyService extends DLedgerRpcService {
         return future;
     }
 
+    /**
+     * 当前leader向被转让leader发送转让请求
+     */
     @Override
-    public CompletableFuture<LeadershipTransferResponse> leadershipTransfer(
-            LeadershipTransferRequest request) throws Exception {
+    public CompletableFuture<LeadershipTransferResponse> leadershipTransfer(LeadershipTransferRequest request) throws Exception {
         CompletableFuture<LeadershipTransferResponse> future = new CompletableFuture<>();
         try {
             RemotingCommand wrapperRequest = RemotingCommand.createRequestCommand(DLedgerRequestCode.LEADERSHIP_TRANSFER.getCode(), null);
@@ -295,8 +306,10 @@ public class DLedgerRpcNettyService extends DLedgerRpcService {
         return future;
     }
 
-    private void writeResponse(RequestOrResponse storeResp, Throwable t, RemotingCommand request,
-                               ChannelHandlerContext ctx) {
+    /**
+     * 写出请求响应
+     */
+    private void writeResponse(RequestOrResponse storeResp, Throwable t, RemotingCommand request, ChannelHandlerContext ctx) {
         RemotingCommand response = null;
         try {
             if (t != null) {
@@ -313,6 +326,7 @@ public class DLedgerRpcNettyService extends DLedgerRpcService {
     }
 
     /**
+     * 分派处理各类rpc请求
      * The core method to handle rpc requests. The advantages of using future instead of callback:
      * <p>
      * 1. separate the caller from actual executor, which make it able to handle the future results by the caller's wish
@@ -403,48 +417,74 @@ public class DLedgerRpcNettyService extends DLedgerRpcService {
         return null;
     }
 
+    /**
+     * 处理client手动转移leader请求
+     */
     @Override
-    public CompletableFuture<LeadershipTransferResponse> handleLeadershipTransfer(
-            LeadershipTransferRequest leadershipTransferRequest) throws Exception {
+    public CompletableFuture<LeadershipTransferResponse> handleLeadershipTransfer(LeadershipTransferRequest leadershipTransferRequest) throws Exception {
         return dLedgerServer.handleLeadershipTransfer(leadershipTransferRequest);
     }
 
+    /**
+     * 处理leader心跳请求
+     */
     @Override
     public CompletableFuture<HeartBeatResponse> handleHeartBeat(HeartBeatRequest request) throws Exception {
         return dLedgerServer.handleHeartBeat(request);
     }
 
+    /**
+     * 处理candidate投票氢气
+     */
     @Override
     public CompletableFuture<VoteResponse> handleVote(VoteRequest request) throws Exception {
         VoteResponse response = dLedgerServer.handleVote(request).get();
         return CompletableFuture.completedFuture(response);
     }
 
+    /**
+     * 处理client新增提案请求
+     */
     @Override
     public CompletableFuture<AppendEntryResponse> handleAppend(AppendEntryRequest request) throws Exception {
         return dLedgerServer.handleAppend(request);
     }
 
+    /**
+     * 处理client查询提案请求
+     */
     @Override
     public CompletableFuture<GetEntriesResponse> handleGet(GetEntriesRequest request) throws Exception {
         return dLedgerServer.handleGet(request);
     }
 
+    /**
+     * 处理client元数据查询请求
+     */
     @Override
     public CompletableFuture<MetadataResponse> handleMetadata(MetadataRequest request) throws Exception {
         return dLedgerServer.handleMetadata(request);
     }
 
+    /**
+     * 处理follower拉取提案请求 【不支持】
+     */
     @Override
     public CompletableFuture<PullEntriesResponse> handlePull(PullEntriesRequest request) throws Exception {
         return dLedgerServer.handlePull(request);
     }
 
+    /**
+     * 处理leader推送提案请求
+     */
     @Override
     public CompletableFuture<PushEntryResponse> handlePush(PushEntryRequest request) throws Exception {
         return dLedgerServer.handlePush(request);
     }
 
+    /**
+     * 封装请求对应响应
+     */
     public RemotingCommand handleResponse(RequestOrResponse response, RemotingCommand request) {
         RemotingCommand remotingCommand = RemotingCommand.createResponseCommand(DLedgerResponseCode.SUCCESS.getCode(), null);
         remotingCommand.setBody(JSON.toJSONBytes(response));
