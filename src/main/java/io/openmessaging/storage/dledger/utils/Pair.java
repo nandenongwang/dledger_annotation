@@ -1,6 +1,5 @@
 package io.openmessaging.storage.dledger.utils;
 
-import lombok.AllArgsConstructor;
 import lombok.Data;
 
 @Data

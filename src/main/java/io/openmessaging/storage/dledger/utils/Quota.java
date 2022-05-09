@@ -1,7 +1,7 @@
 package io.openmessaging.storage.dledger.utils;
 
 /**
- * 统计工具
+ * 统计工具 【统计push请求】
  */
 public class Quota {
 
