@@ -1,33 +1,40 @@
-/*
- * Copyright 2017-2022 The DLedger Authors.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      https://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package io.openmessaging.storage.dledger.protocol;
 
 import io.openmessaging.storage.dledger.entry.DLedgerEntry;
 import io.openmessaging.storage.dledger.utils.PreConditions;
+
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * 同步请求
+ */
 public class PushEntryRequest extends RequestOrResponse {
+
+    /**
+     * 同步时顺带提交位置
+     */
     private long commitIndex = -1;
+
+    /**
+     * 追加类型
+     */
     private Type type = Type.APPEND;
+
+    /**
+     * 单体同步时单体日志
+     */
     private DLedgerEntry entry;
 
-    //for batch append push
-    private List<DLedgerEntry> batchEntry = new ArrayList<>();
+
+    /**
+     * 批量同步时批量日志
+     */
+    private final List<DLedgerEntry> batchEntry = new ArrayList<>();
+
+    /**
+     * 批量同步时批量日志总数
+     */
     private int totalSize;
 
     public DLedgerEntry getEntry() {
@@ -57,7 +64,7 @@ public class PushEntryRequest extends RequestOrResponse {
     public void addEntry(DLedgerEntry entry) {
         if (!batchEntry.isEmpty()) {
             PreConditions.check(batchEntry.get(0).getIndex() + batchEntry.size() == entry.getIndex(),
-                DLedgerResponseCode.UNKNOWN, "batch push wrong order");
+                    DLedgerResponseCode.UNKNOWN, "batch push wrong order");
         }
         batchEntry.add(entry);
         totalSize += entry.getSize();

@@ -308,7 +308,7 @@ public class DLedgerEntryPusher {
     }
 
     /**
-     * 后台提交位置检查服务
+     * 后台提交位置(达成一致)检查服务
      * This thread will check the quorum index and complete the pending requests.
      */
     private class QuorumAckChecker extends ShutdownAbleThread {
@@ -432,7 +432,7 @@ public class DLedgerEntryPusher {
                     int ackNum = 0;
 
                     //region 释放提交序号前所有挂起的新增提案请求
-                    for (Long i = quorumIndex; i > lastQuorumIndex; i--) {
+                    for (long i = quorumIndex; i > lastQuorumIndex; i--) {
                         try {
                             CompletableFuture<AppendEntryResponse> future = responses.remove(i);
                             if (future == null) {
@@ -470,6 +470,7 @@ public class DLedgerEntryPusher {
                 }
                 //endregion
 
+                //更新达成一致的提案位置
                 lastQuorumIndex = quorumIndex;
             } catch (Throwable t) {
                 DLedgerEntryPusher.logger.error("Error in {}", getName(), t);
@@ -548,8 +549,19 @@ public class DLedgerEntryPusher {
          */
         private final ConcurrentMap<Long/* 提案index */, Long/* 请求时间 */> pendingMap = new ConcurrentHashMap<>();
 
-        private final ConcurrentMap<Long, Pair<Long, Integer>> batchPendingMap = new ConcurrentHashMap<>();
+        /**
+         * 挂起中的批量append请求
+         */
+        private final ConcurrentMap<Long/* 单次批量提案最大index */, Pair<Long/* 请求时间 */, Integer/* 批次数目 */>> batchPendingMap = new ConcurrentHashMap<>();
+
+        /**
+         * 当前待发送的批量提案、【存储到一定数量时才会发送】
+         */
         private final PushEntryRequest batchAppendEntryRequest = new PushEntryRequest();
+
+        /**
+         * 请求统计 【限制推送qps、默认5】
+         */
         private final Quota quota = new Quota(dLedgerConfig.getPeerPushQuota());
 
         public EntryDispatcher(String peerId, Logger logger) {
@@ -557,6 +569,9 @@ public class DLedgerEntryPusher {
             this.peerId = peerId;
         }
 
+        /**
+         * 检查并刷新同步线程状态 【任期与leader是否发生变更、是则变更到初始比较阶段、会被挂起不再参与追加】
+         */
         private boolean checkAndFreshState() {
             if (!memberState.isLeader()) {
                 return false;
@@ -590,6 +605,9 @@ public class DLedgerEntryPusher {
             return request;
         }
 
+        /**
+         * 重置清空批量请求内容
+         */
         private void resetBatchAppendEntryRequest() {
             batchAppendEntryRequest.setGroup(memberState.getGroup());
             batchAppendEntryRequest.setRemoteId(peerId);
@@ -599,17 +617,24 @@ public class DLedgerEntryPusher {
             batchAppendEntryRequest.clear();
         }
 
+        /**
+         * 推送请求限流
+         */
         private void checkQuotaAndWait(DLedgerEntry entry) {
-            if (dLedgerStore.getLedgerEndIndex() - entry.getIndex() <= maxPendingSize) {
+            //待推送请求在1000条内
+            if (dLedgerStore.getLedgerEndIndex() - entry.getIndex() <= maxPendingSize/* 1000 */) {
                 return;
             }
+            //内存存储无限制
             if (dLedgerStore instanceof DLedgerMemoryStore) {
                 return;
             }
+            //待推送请求需读取文件大小在300M内
             DLedgerMmapFileStore mmapFileStore = (DLedgerMmapFileStore) dLedgerStore;
-            if (mmapFileStore.getDataFileList().getMaxWrotePosition() - entry.getPos() < dLedgerConfig.getPeerPushThrottlePoint()) {
+            if (mmapFileStore.getDataFileList().getMaxWrotePosition() - entry.getPos() < dLedgerConfig.getPeerPushThrottlePoint()/* 300M */) {
                 return;
             }
+            //采样并休眠500ms、默认限制推送qps为5
             quota.sample(entry.getSize());
             if (quota.validateNow()) {
                 long leftNow = quota.leftNow();
@@ -617,6 +642,52 @@ public class DLedgerEntryPusher {
                 DLedgerUtils.sleep(leftNow);
             }
         }
+
+        /**
+         * 从存储中获取指定位置待同步日志
+         */
+        private DLedgerEntry getDLedgerEntryForAppend(long index) {
+            DLedgerEntry entry;
+            try {
+                entry = dLedgerStore.get(index);
+            } catch (DLedgerException e) {
+                //  Do compare, in case the ledgerBeginIndex get refreshed.
+                if (DLedgerResponseCode.INDEX_LESS_THAN_LOCAL_BEGIN.equals(e.getCode())) {
+                    logger.info("[Push-{}]Get INDEX_LESS_THAN_LOCAL_BEGIN when requested index is {}, try to compare", peerId, index);
+                    changeState(-1, PushEntryRequest.Type.COMPARE);
+                    return null;
+                }
+                throw e;
+            }
+            PreConditions.check(entry != null, DLedgerResponseCode.UNKNOWN, "writeIndex=%d", index);
+            return entry;
+        }
+
+        /**
+         * 单独向follower同步提交位置
+         */
+        private void doCommit() throws Exception {
+            if (DLedgerUtils.elapsed(lastPushCommitTimeMs) > 1000) {
+                PushEntryRequest request = buildPushRequest(null, PushEntryRequest.Type.COMMIT);
+                //Ignore the results
+                dLedgerRpcService.push(request);
+                lastPushCommitTimeMs = System.currentTimeMillis();
+            }
+        }
+
+        /**
+         * 检测最早待确认提案复制是否响应超时、是则重新发送
+         */
+        private void doCheckAppendResponse() throws Exception {
+            long peerWaterMark = getPeerWaterMark(term, peerId);
+            Long sendTimeMs = pendingMap.get(peerWaterMark + 1);
+            if (sendTimeMs != null && System.currentTimeMillis() - sendTimeMs > dLedgerConfig.getMaxPushTimeOutMs()/* 1000 */) {
+                logger.warn("[Push-{}]Retry to push entry at {}", peerId, peerWaterMark + 1);
+                doAppendInner(peerWaterMark + 1);
+            }
+        }
+
+        //region 单体同步
 
         /**
          * 向该follower发送日志追加请求 【成功后更新水位进度、并唤醒提交检查服务线程】
@@ -655,47 +726,6 @@ public class DLedgerEntryPusher {
             lastPushCommitTimeMs = System.currentTimeMillis();
         }
 
-        private DLedgerEntry getDLedgerEntryForAppend(long index) {
-            DLedgerEntry entry;
-            try {
-                entry = dLedgerStore.get(index);
-            } catch (DLedgerException e) {
-                //  Do compare, in case the ledgerBeginIndex get refreshed.
-                if (DLedgerResponseCode.INDEX_LESS_THAN_LOCAL_BEGIN.equals(e.getCode())) {
-                    logger.info("[Push-{}]Get INDEX_LESS_THAN_LOCAL_BEGIN when requested index is {}, try to compare", peerId, index);
-                    changeState(-1, PushEntryRequest.Type.COMPARE);
-                    return null;
-                }
-                throw e;
-            }
-            PreConditions.check(entry != null, DLedgerResponseCode.UNKNOWN, "writeIndex=%d", index);
-            return entry;
-        }
-
-        /**
-         * 向follower同步提交位置
-         */
-        private void doCommit() throws Exception {
-            if (DLedgerUtils.elapsed(lastPushCommitTimeMs) > 1000) {
-                PushEntryRequest request = buildPushRequest(null, PushEntryRequest.Type.COMMIT);
-                //Ignore the results
-                dLedgerRpcService.push(request);
-                lastPushCommitTimeMs = System.currentTimeMillis();
-            }
-        }
-
-        /**
-         * 检测最早待确认提案复制是否响应超时、是则重新发送
-         */
-        private void doCheckAppendResponse() throws Exception {
-            long peerWaterMark = getPeerWaterMark(term, peerId);
-            Long sendTimeMs = pendingMap.get(peerWaterMark + 1);
-            if (sendTimeMs != null && System.currentTimeMillis() - sendTimeMs > dLedgerConfig.getMaxPushTimeOutMs()/* 1000 */) {
-                logger.warn("[Push-{}]Retry to push entry at {}", peerId, peerWaterMark + 1);
-                doAppendInner(peerWaterMark + 1);
-            }
-        }
-
         /**
          * 从同步位置开始向follower同步提案
          */
@@ -707,7 +737,7 @@ public class DLedgerEntryPusher {
                 if (type.get() != PushEntryRequest.Type.APPEND) {
                     break;
                 }
-                //region 同步位置到达最后、同步提交位置
+                //region 同步位置到达最后、单独发送提交请求
                 if (writeIndex > dLedgerStore.getLedgerEndIndex()) {
                     doCommit();
                     doCheckAppendResponse();
@@ -740,63 +770,13 @@ public class DLedgerEntryPusher {
                 //endregion
             }
         }
+        //endregion
 
-        private void sendBatchAppendEntryRequest() throws Exception {
-            batchAppendEntryRequest.setCommitIndex(dLedgerStore.getCommittedIndex());
-            CompletableFuture<PushEntryResponse> responseFuture = dLedgerRpcService.push(batchAppendEntryRequest);
-            batchPendingMap.put(batchAppendEntryRequest.getLastEntryIndex(), new Pair<>(System.currentTimeMillis(), batchAppendEntryRequest.getCount()));
-            responseFuture.whenComplete((x, ex) -> {
-                try {
-                    PreConditions.check(ex == null, DLedgerResponseCode.UNKNOWN);
-                    DLedgerResponseCode responseCode = DLedgerResponseCode.valueOf(x.getCode());
-                    switch (responseCode) {
-                        case SUCCESS:
-                            batchPendingMap.remove(x.getIndex());
-                            updatePeerWaterMark(x.getTerm(), peerId, x.getIndex());
-                            break;
-                        case INCONSISTENT_STATE:
-                            logger.info("[Push-{}]Get INCONSISTENT_STATE when batch push index={} term={}", peerId, x.getIndex(), x.getTerm());
-                            changeState(-1, PushEntryRequest.Type.COMPARE);
-                            break;
-                        default:
-                            logger.warn("[Push-{}]Get error response code {} {}", peerId, responseCode, x.baseInfo());
-                            break;
-                    }
-                } catch (Throwable t) {
-                    logger.error("", t);
-                }
-            });
-            lastPushCommitTimeMs = System.currentTimeMillis();
-            batchAppendEntryRequest.clear();
-        }
+        //region 批量同步
 
-        private void doBatchAppendInner(long index) throws Exception {
-            DLedgerEntry entry = getDLedgerEntryForAppend(index);
-            if (null == entry) {
-                return;
-            }
-            batchAppendEntryRequest.addEntry(entry);
-            if (batchAppendEntryRequest.getTotalSize() >= dLedgerConfig.getMaxBatchPushSize()) {
-                sendBatchAppendEntryRequest();
-            }
-        }
-
-        private void doCheckBatchAppendResponse() throws Exception {
-            long peerWaterMark = getPeerWaterMark(term, peerId);
-            Pair pair = batchPendingMap.get(peerWaterMark + 1);
-            if (pair != null && System.currentTimeMillis() - (long) pair.getKey() > dLedgerConfig.getMaxPushTimeOutMs()) {
-                long firstIndex = peerWaterMark + 1;
-                long lastIndex = firstIndex + (int) pair.getValue() - 1;
-                logger.warn("[Push-{}]Retry to push entry from {} to {}", peerId, firstIndex, lastIndex);
-                batchAppendEntryRequest.clear();
-                for (long i = firstIndex; i <= lastIndex; i++) {
-                    DLedgerEntry entry = dLedgerStore.get(i);
-                    batchAppendEntryRequest.addEntry(entry);
-                }
-                sendBatchAppendEntryRequest();
-            }
-        }
-
+        /**
+         * 从同步位置开始向follower批量同步提案 【与单体发送相同】
+         */
         private void doBatchAppend() throws Exception {
             while (true) {
                 if (!checkAndFreshState()) {
@@ -831,7 +811,76 @@ public class DLedgerEntryPusher {
             }
         }
 
-        private void doTruncate(long truncateIndex) throws Exception {
+        /**
+         * 从同步位置开始向批量缓冲中新增提案、达到发送阈值时发送
+         */
+        private void doBatchAppendInner(long index) throws Exception {
+            DLedgerEntry entry = getDLedgerEntryForAppend(index);
+            if (null == entry) {
+                return;
+            }
+            batchAppendEntryRequest.addEntry(entry);
+            if (batchAppendEntryRequest.getTotalSize() >= dLedgerConfig.getMaxBatchPushSize()/* 4x1024 */) {
+                sendBatchAppendEntryRequest();
+            }
+        }
+
+        /**
+         * 发送批量同步提案
+         */
+        private void sendBatchAppendEntryRequest() throws Exception {
+            batchAppendEntryRequest.setCommitIndex(dLedgerStore.getCommittedIndex());
+            CompletableFuture<PushEntryResponse> responseFuture = dLedgerRpcService.push(batchAppendEntryRequest);
+            batchPendingMap.put(batchAppendEntryRequest.getLastEntryIndex(), new Pair<>(System.currentTimeMillis(), batchAppendEntryRequest.getCount()));
+            responseFuture.whenComplete((x, ex) -> {
+                try {
+                    PreConditions.check(ex == null, DLedgerResponseCode.UNKNOWN);
+                    DLedgerResponseCode responseCode = DLedgerResponseCode.valueOf(x.getCode());
+                    switch (responseCode) {
+                        case SUCCESS:
+                            batchPendingMap.remove(x.getIndex());
+                            updatePeerWaterMark(x.getTerm(), peerId, x.getIndex());
+                            break;
+                        case INCONSISTENT_STATE:
+                            logger.info("[Push-{}]Get INCONSISTENT_STATE when batch push index={} term={}", peerId, x.getIndex(), x.getTerm());
+                            changeState(-1, PushEntryRequest.Type.COMPARE);
+                            break;
+                        default:
+                            logger.warn("[Push-{}]Get error response code {} {}", peerId, responseCode, x.baseInfo());
+                            break;
+                    }
+                } catch (Throwable t) {
+                    logger.error("", t);
+                }
+            });
+            lastPushCommitTimeMs = System.currentTimeMillis();
+            batchAppendEntryRequest.clear();
+        }
+
+        /**
+         * 检查最早的批量请求是否超时、并重试
+         */
+        private void doCheckBatchAppendResponse() throws Exception {
+            long peerWaterMark = getPeerWaterMark(term, peerId);
+            Pair pair = batchPendingMap.get(peerWaterMark + 1);//TODO 能取出最早挂起的批量同步请求？？？
+            if (pair != null && System.currentTimeMillis() - (long) pair.getKey() > dLedgerConfig.getMaxPushTimeOutMs()) {
+                long firstIndex = peerWaterMark + 1;
+                long lastIndex = firstIndex + (int) pair.getValue() - 1;
+                logger.warn("[Push-{}]Retry to push entry from {} to {}", peerId, firstIndex, lastIndex);
+                batchAppendEntryRequest.clear();
+                for (long i = firstIndex; i <= lastIndex; i++) {
+                    DLedgerEntry entry = dLedgerStore.get(i);
+                    batchAppendEntryRequest.addEntry(entry);
+                }
+                sendBatchAppendEntryRequest();
+            }
+        }
+        //endregion
+
+        /**
+         * 请求follower截断日志、完成校正并更新线程任务为追加阶段
+         */
+        private void doTruncate(long truncateIndex/* 丢弃位置 */) throws Exception {
             PreConditions.check(type.get() == PushEntryRequest.Type.TRUNCATE, DLedgerResponseCode.UNKNOWN);
             DLedgerEntry truncateEntry = dLedgerStore.get(truncateIndex);
             PreConditions.check(truncateEntry != null, DLedgerResponseCode.UNKNOWN);
@@ -844,11 +893,17 @@ public class DLedgerEntryPusher {
             changeState(truncateIndex, PushEntryRequest.Type.APPEND);
         }
 
-        private synchronized void changeState(long index, PushEntryRequest.Type target) {
+        /**
+         * 更新线程任务任务阶段
+         */
+        private synchronized void changeState(long index/* 最后同步位置 */, PushEntryRequest.Type target) {
             logger.info("[Push-{}]Change state from {} to {} at {}", peerId, type.get(), target, index);
             switch (target) {
+                //region 正常追加阶段
                 case APPEND:
                     compareIndex = -1;
+                    //更新复制进度、设置同步开始位置、唤醒提交检查任务
+                    //follower最后与leader保持同步的日志位置 【1、直接比较成功的比较位置 2、存在需要截断的截断位置】
                     updatePeerWaterMark(term, peerId, index);
                     quorumAckChecker.wakeup();
                     writeIndex = index + 1;
@@ -856,6 +911,9 @@ public class DLedgerEntryPusher {
                         resetBatchAppendEntryRequest();
                     }
                     break;
+                //endregion
+
+                //region 启动时校正-比较阶段 【重置比较指针到-1、表示比较时会从leader最新日志开始比较】
                 case COMPARE:
                     if (this.type.compareAndSet(PushEntryRequest.Type.APPEND, PushEntryRequest.Type.COMPARE)) {
                         compareIndex = -1;
@@ -866,29 +924,43 @@ public class DLedgerEntryPusher {
                         }
                     }
                     break;
+                //endregion
+
+                //region 启动时校正-截断阶段 【重置比较指针到-1】
                 case TRUNCATE:
                     compareIndex = -1;
                     break;
+                //endregion
+
                 default:
                     break;
             }
+            //设置新的阶段状态
             type.set(target);
         }
 
         /**
-         *
+         * 比较并校正follower日志数据
          */
         private void doCompare() throws Exception {
             while (true) {
                 if (!checkAndFreshState()) {
                     break;
                 }
+
+                //region 复制任务已在正常追加阶段、无需校正
                 if (type.get() != PushEntryRequest.Type.COMPARE && type.get() != PushEntryRequest.Type.TRUNCATE) {
                     break;
                 }
+                //endregion
+
+                //region 未存储任何提案日志、无需校正
                 if (compareIndex == -1 && dLedgerStore.getLedgerEndIndex() == -1) {
                     break;
                 }
+                //endregion
+
+                //region 从leader日志倒序开始校正、更新比较位置为最后提案日志序号
                 //revise the compareIndex
                 if (compareIndex == -1) {
                     compareIndex = dLedgerStore.getLedgerEndIndex();
@@ -897,7 +969,9 @@ public class DLedgerEntryPusher {
                     logger.info("[Push-{}][DoCompare] compareIndex={} out of range {}-{}", peerId, compareIndex, dLedgerStore.getLedgerBeginIndex(), dLedgerStore.getLedgerEndIndex());
                     compareIndex = dLedgerStore.getLedgerEndIndex();
                 }
+                //endregion
 
+                //region 从比较位置取出日志、向follower发送进行比较
                 DLedgerEntry entry = dLedgerStore.get(compareIndex);
                 PreConditions.check(entry != null, DLedgerResponseCode.INTERNAL_ERROR, "compareIndex=%d", compareIndex);
                 PushEntryRequest request = buildPushRequest(entry, PushEntryRequest.Type.COMPARE);
@@ -906,8 +980,11 @@ public class DLedgerEntryPusher {
                 PreConditions.check(response != null, DLedgerResponseCode.INTERNAL_ERROR, "compareIndex=%d", compareIndex);
                 PreConditions.check(response.getCode() == DLedgerResponseCode.INCONSISTENT_STATE.getCode() || response.getCode() == DLedgerResponseCode.SUCCESS.getCode()
                         , DLedgerResponseCode.valueOf(response.getCode()), "compareIndex=%d", compareIndex);
+                //endregion
+
                 long truncateIndex = -1;
 
+                //region 比较成功 【follower存在该索引日志、无需继续向前比较、变更同步任务到正常追加阶段】
                 if (response.getCode() == DLedgerResponseCode.SUCCESS.getCode()) {
                     /*
                      * The comparison is successful:
@@ -915,12 +992,18 @@ public class DLedgerEntryPusher {
                      * 2.Truncate the follower, if the follower has some dirty entries.
                      */
                     if (compareIndex == response.getEndIndex()) {
+                        //follower日志与leader相当或落后
                         changeState(compareIndex, PushEntryRequest.Type.APPEND);
                         break;
                     } else {
+                        //该follower存在上次未达成一致的脏数据、需全部截断
                         truncateIndex = compareIndex;
                     }
-                } else if (response.getEndIndex() < dLedgerStore.getLedgerBeginIndex()
+                }
+                //endregion
+
+                //region follower日志跟leader没交集需全部删除全部复制 【follower长期崩溃、leader保留时间后已经删除部分日志】
+                else if (response.getEndIndex() < dLedgerStore.getLedgerBeginIndex()
                         || response.getBeginIndex() > dLedgerStore.getLedgerEndIndex()) {
                     /*
                      The follower's entries does not intersect with the leader.
@@ -928,31 +1011,49 @@ public class DLedgerEntryPusher {
                      Just truncate the follower.
                      */
                     truncateIndex = dLedgerStore.getLedgerBeginIndex();
-                } else if (compareIndex < response.getBeginIndex()) {
+                }
+                //endregion
+
+                //region follower最小日志序号大于leader最后日志序号、需全部删除 【磁盘损坏？？？】
+                else if (compareIndex < response.getBeginIndex()) {
                     /*
                      The compared index is smaller than the follower's begin index.
                      This happened rarely, usually means some disk damage.
                      Just truncate the follower.
                      */
                     truncateIndex = dLedgerStore.getLedgerBeginIndex();
-                } else if (compareIndex > response.getEndIndex()) {
+                }
+                //endregion
+
+                //region 比较指针比follower最后日志还大、从follower最大日志开始比较、跳过多余比较
+                else if (compareIndex > response.getEndIndex()) {
                     /*
                      The compared index is bigger than the follower's end index.
                      This happened frequently. For the compared index is usually starting from the end index of the leader.
                      */
                     compareIndex = response.getEndIndex();
-                } else {
+                }
+                //endregion
+
+                //region 递减比较指针、继续向前比较
+                else {
                     /*
                       Compare failed and the compared index is in the range of follower's entries.
                      */
                     compareIndex--;
                 }
+                //endregion
+
+                //region 已比较完leader所有日志还未找到同步位置、删除follower日志全部重新复制
                 /*
                  The compared index is smaller than the leader's begin index, truncate the follower.
                  */
                 if (compareIndex < dLedgerStore.getLedgerBeginIndex()) {
                     truncateIndex = dLedgerStore.getLedgerBeginIndex();
                 }
+                //endregion
+
+                //region 判断是否需要截断并进行截断
                 /*
                  If get value for truncateIndex, do it right now.
                  */
@@ -961,9 +1062,13 @@ public class DLedgerEntryPusher {
                     doTruncate(truncateIndex);
                     break;
                 }
+                //endregion
             }
         }
 
+        /**
+         * 线程任务 【校正(经历比较阶段和截断截断)follower日志后持续向follower追加日志】
+         */
         @Override
         public void doWork() {
             try {
@@ -1162,11 +1267,12 @@ public class DLedgerEntryPusher {
         }
 
         /**
-         * 修复挂起请求
+         * 清理挂起请求
          */
         private void checkAppendFuture(long endIndex) {
             long minFastForwardIndex = Long.MAX_VALUE;
             for (Pair<PushEntryRequest, CompletableFuture<PushEntryResponse>> pair : writeRequestMap.values()) {
+                //挂起请求中同步日志范围、但体同步时frist、last相同
                 long firstEntryIndex = pair.getKey().getFirstEntryIndex();
                 long lastEntryIndex = pair.getKey().getLastEntryIndex();
 
@@ -1193,18 +1299,23 @@ public class DLedgerEntryPusher {
                 }
                 //endregion
 
-                //TODO
+                //新接收的第一个push请求、结束检查
                 if (firstEntryIndex == endIndex + 1) {
                     return;
                 }
+
+                //新接收的后续push请求、未超时继续下一个
                 TimeoutFuture<PushEntryResponse> future = (TimeoutFuture<PushEntryResponse>) pair.getValue();
                 if (!future.isTimeOut()) {
                     continue;
                 }
+                //新接收的后续push请求超时、从最小位置重发
                 if (firstEntryIndex < minFastForwardIndex) {
                     minFastForwardIndex = firstEntryIndex;
                 }
             }
+
+            //region 通知leader从minFastForwardIndex重发提案
             if (minFastForwardIndex == Long.MAX_VALUE) {
                 return;
             }
@@ -1214,6 +1325,7 @@ public class DLedgerEntryPusher {
             }
             logger.warn("[PushFastForward] ledgerEndIndex={} entryIndex={}", endIndex, minFastForwardIndex);
             pair.getValue().complete(buildResponse(pair.getKey(), DLedgerResponseCode.INCONSISTENT_STATE.getCode()));
+            //endregion
         }
 
         /**
