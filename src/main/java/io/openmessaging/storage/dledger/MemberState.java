@@ -1,19 +1,3 @@
-/*
- * Copyright 2017-2022 The DLedger Authors.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      https://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package io.openmessaging.storage.dledger;
 
 import io.openmessaging.storage.dledger.protocol.DLedgerResponseCode;
@@ -31,6 +15,9 @@ import java.util.concurrent.locks.ReentrantLock;
 
 import static io.openmessaging.storage.dledger.MemberState.Role.*;
 
+/**
+ * 节点状态
+ */
 public class MemberState {
 
     public static final String TERM_PERSIST_FILE = "currterm";
@@ -39,36 +26,75 @@ public class MemberState {
     public static Logger logger = LoggerFactory.getLogger(MemberState.class);
     public final DLedgerConfig dLedgerConfig;
     private final ReentrantLock defaultLock = new ReentrantLock();
+
+    /**
+     * dledger集群分组
+     */
     private final String group;
+
+    /**
+     * 节点ID
+     */
     private final String selfId;
+
+    /**
+     * 所有节点ID&地址 【id1-addr1;id2-adr2;id3-addr3】
+     */
     private final String peers;
+
+    /**
+     * 当前节点角色
+     */
     private volatile Role role = CANDIDATE;
+
+    /**
+     * 当前leader
+     */
     private volatile String leaderId;
 
     /**
-     * 当前节点朝代
+     * 当前朝代
      */
     private volatile long currTerm = 0;
 
     /**
-     * 当前投票节点
+     * 当前已投票节点
      */
     private volatile String currVoteFor;
 
     /**
-     * 最近提议序号
+     * 最新提案序号
      */
     private volatile long ledgerEndIndex = -1;
 
     /**
-     * 最近提议朝代
+     * 最新提案任期
      */
     private volatile long ledgerEndTerm = -1;
-    private long knownMaxTermInGroup = -1;
-    private Map<String, String> peerMap = new HashMap<>();
-    private Map<String, Boolean> peersLiveTable = new ConcurrentHashMap<>();
 
+    /**
+     * 连接节点中最大任期
+     */
+    private long knownMaxTermInGroup = -1;
+
+    /**
+     * 所有配置peers节点
+     */
+    private final Map<String/*节点ID */, String/* 地址 */> peerMap = new HashMap<>();
+
+    /**
+     * 节点连接状态
+     */
+    private Map<String/* 节点ID */, Boolean/* 网络是否正常 */> peersLiveTable = new ConcurrentHashMap<>();
+
+    /**
+     * leader待转移leader的followerId 【leader节点等待新leader转移时设置为新leaderId】
+     */
     private volatile String transferee;
+
+    /**
+     * follower待成为leader的新任期
+     */
     private volatile long termToTakeLeadership = -1;
 
     public MemberState(DLedgerConfig config) {
@@ -146,7 +172,7 @@ public class MemberState {
     }
 
     /**
-     *
+     * 竞选任期 【最大任期或递增当前任期】
      */
     public synchronized long nextTerm() {
         //检查操作节点是否是master
@@ -162,7 +188,7 @@ public class MemberState {
     }
 
     /**
-     *
+     * 变更节点角色到leader
      */
     public synchronized void changeToLeader(long term) {
         PreConditions.check(currTerm == term, DLedgerResponseCode.ILLEGAL_MEMBER_STATE, "%d != %d", currTerm, term);
@@ -172,7 +198,7 @@ public class MemberState {
     }
 
     /**
-     *
+     * 变更节点角色到follower
      */
     public synchronized void changeToFollower(long term, String leaderId) {
         PreConditions.check(currTerm == term, DLedgerResponseCode.ILLEGAL_MEMBER_STATE, "%d != %d", currTerm, term);
@@ -296,6 +322,9 @@ public class MemberState {
         return ledgerEndTerm;
     }
 
+    /**
+     * 节点角色 【主、从、候选者】
+     */
     public enum Role {
         UNKNOWN,
         CANDIDATE,
